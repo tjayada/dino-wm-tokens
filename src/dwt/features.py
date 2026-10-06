@@ -13,7 +13,7 @@ from tqdm.auto import tqdm
 
 from .data import dataset_path
 from .envs import EnvSpec
-from .models import ENCODER_PX, FEAT_DIM, GRID, HUB_NAME, pool_tokens
+from .models import ENCODER_PX, FEAT_DIM, GRID, HUB_NAME, TOKENS, pool_tokens
 from .paths import data_root, persist, restore
 
 VARIANTS = ("cls", "mean", "g2", "g4", "g7")
@@ -75,7 +75,7 @@ def cache_features(
         path.parent.mkdir(parents=True, exist_ok=True)
         f = h5py.File(path, "a")
         if "feat" not in f:
-            k = encoder({np.zeros((1, 224, 224, 3), np.uint8)}.pop())[v].shape[1]
+            k = TOKENS[v]
             f.create_dataset(
                 "feat",
                 shape=(n_frames, k, FEAT_DIM),
