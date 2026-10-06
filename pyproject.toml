@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dwt"
+version = "0.1.0"
+description = "How many tokens does a frozen-DINO world model need? Token-budget study on DINO-WM."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "stable-worldmodel[train,env]==0.1.1",
+    "hdf5plugin",
+    "mujoco>=3.14,<3.15",           # dm_control 1.0.47 crashes on 3.15
+    "transformers>=4.50,<5",        # released checkpoints use the 4.x ViT layer names
+    "datasets>=3",
+    "huggingface-hub<1",
+    "scipy==1.14.1; sys_platform == 'darwin'",   # 1.15.3 wheel fails to load on macOS 27
+    "psutil",
+    "zstandard",
+    "pandas",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["ipykernel", "nbclient", "nbformat", "ruff"]
+
+[project.scripts]
+dwt = "dwt.pipeline:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-include = ["*.ipynb"]
+exclude = ["third_party", "venv", "stablewm"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E402"]   # notebooks set environment variables before importing
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*.ipynb" = ["E501", "E7", "F821", "B", "SIM"]   # the TwoRoom record: cross-cell names, compact cell style
