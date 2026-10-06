@@ -15,8 +15,14 @@ GRID = 14
 FEAT_DIM = 384
 ENCODER_PX = GRID * 14
 HUB_NAME = "dinov2_vits14"
-TOKENS = {"cls": 1, "mean": 1, "g2": 4, "g4": 16, "g7": 49, "full": GRID * GRID}
+TOKENS = {"cls": 1, "mean": 1, "g2": 4, "g4": 16, "g7": 49, "full": GRID * GRID, "r1": 1, "r4": 4}
 _GRID_SIDE = {"g2": 2, "g4": 4, "g7": 7, "full": GRID}
+READOUT_SOURCE = "g7"  # learned-readout variants (r*) read the cached 7 x 7 tokens
+
+
+def feature_variant(variant: str) -> str:
+    """Which cached feature file a variant trains from."""
+    return READOUT_SOURCE if variant.startswith("r") else variant
 
 
 def pixel_transform(img_size=224):
@@ -58,6 +64,7 @@ class PooledDino(nn.Module):
         super().__init__()
         assert variant in TOKENS, f"unknown variant {variant!r}"
         self.variant = variant
+        self.pool_variant = variant  # what the frozen grid is pooled to (ReadoutDino overrides `variant`)
         self.hub_name = hub_name
         backbone = torch.hub.load("facebookresearch/dinov2", hub_name).eval()
         backbone.requires_grad_(False)
@@ -82,8 +89,64 @@ class PooledDino(nn.Module):
             pixels, size=(ENCODER_PX, ENCODER_PX), mode="bilinear", antialias=True, align_corners=False
         )
         out = backbone.forward_features(x)
-        tokens = pool_tokens(out["x_norm_clstoken"], out["x_norm_patchtokens"], self.variant)
+        tokens = pool_tokens(out["x_norm_clstoken"], out["x_norm_patchtokens"], self.pool_variant)
         return SimpleNamespace(last_hidden_state=torch.cat([out["x_norm_clstoken"][:, None], tokens], dim=1))
+
+
+class CrossBlock(nn.Module):
+    """Queries attend to the input tokens, then to each other, then an MLP (pre-norm)."""
+
+    def __init__(self, dim, heads, mlp_ratio=4):
+        super().__init__()
+        self.norm_q, self.norm_kv, self.norm_s, self.norm_m = (nn.LayerNorm(dim) for _ in range(4))
+        self.cross = nn.MultiheadAttention(dim, heads, batch_first=True)
+        self.self_attn = nn.MultiheadAttention(dim, heads, batch_first=True)
+        self.mlp = nn.Sequential(nn.Linear(dim, mlp_ratio * dim), nn.GELU(), nn.Linear(mlp_ratio * dim, dim))
+
+    def forward(self, q, x):
+        kv = self.norm_kv(x)
+        q = q + self.cross(self.norm_q(q), kv, kv, need_weights=False)[0]
+        s = self.norm_s(q)
+        q = q + self.self_attn(s, s, s, need_weights=False)[0]
+        return q + self.mlp(self.norm_m(q))
+
+
+class Readout(nn.Module):
+    """k learned queries that cross-attend to n_in frozen tokens (Set Transformer / Perceiver pooling)."""
+
+    def __init__(self, k, n_in=TOKENS[READOUT_SOURCE], dim=FEAT_DIM, heads=6, depth=2):
+        super().__init__()
+        self.pos = nn.Parameter(torch.randn(1, n_in, dim) * 0.02)
+        self.queries = nn.Parameter(torch.randn(1, k, dim) * 0.02)
+        self.blocks = nn.ModuleList([CrossBlock(dim, heads) for _ in range(depth)])
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, tokens):
+        """(B, n_in, dim) -> (B, k, dim)."""
+        x = tokens + self.pos
+        q = self.queries.expand(tokens.shape[0], -1, -1)
+        for block in self.blocks:
+            q = block(q, x)
+        return self.norm(q)
+
+
+class ReadoutDino(PooledDino):
+    """Frozen DINOv2 -> fixed 7 x 7 pooling -> learned readout to k tokens."""
+
+    def __init__(self, variant, hub_name=HUB_NAME, **readout_kwargs):
+        super().__init__(READOUT_SOURCE, hub_name)
+        self.variant = variant
+        self.readout = Readout(TOKENS[variant], **readout_kwargs)
+
+    @property
+    def num_tokens(self):
+        return TOKENS[self.variant]
+
+    def forward(self, pixels, **kwargs):
+        with torch.no_grad():
+            source = super().forward(pixels).last_hidden_state
+        tokens = self.readout(source[:, 1:].float())
+        return SimpleNamespace(last_hidden_state=torch.cat([source[:, :1], tokens], dim=1))
 
 
 def model_config(
@@ -104,7 +167,10 @@ def model_config(
         "history_size": history,
         "num_pred": 1,
         "interpolate_pos_encoding": False,
-        "encoder": {"_target_": "dwt.models.PooledDino", "variant": variant},
+        "encoder": {
+            "_target_": "dwt.models.ReadoutDino" if variant.startswith("r") else "dwt.models.PooledDino",
+            "variant": variant,
+        },
         "predictor": {
             "_target_": "stable_worldmodel.wm.prejepa.module.CausalPredictor",
             "num_patches": TOKENS[variant],
@@ -137,5 +203,5 @@ def build_model(variant, **kwargs):
 
 
 def trainable_parameters(model):
-    """Predictor and action embedder (the encoder is frozen and outside the state dict)."""
-    return [p for n, p in model.named_parameters() if n.startswith(("predictor.", "extra_encoders."))]
+    """Everything registered: predictor, action embedder and, if present, the readout (DINOv2 is outside)."""
+    return list(model.parameters())

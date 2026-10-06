@@ -41,7 +41,7 @@ def run(args):
     import torch
 
     from . import data, envs, evaluate, features, references, train
-    from .models import TOKENS, pixel_transform
+    from .models import TOKENS, feature_variant, pixel_transform
     from .paths import data_root, persist_root, results_root
 
     spec = envs.ENVS[args.env]
@@ -129,12 +129,18 @@ def run(args):
         )
         n_ep = n_episodes if n_episodes is not None else len(dataset.lengths)
         tag = features.feature_tag(spec, n_ep, smoke)
+        needed = {feature_variant(v) for v in variants}
         if files is None:
-            assert all(features.feature_path(tag, v).exists() for v in variants), (
-                "features missing: run the features stage"
-            )
+            missing = [v for v in needed if not features.feature_path(tag, v).exists()]
+            assert not missing, f"features missing for {missing}: run the features stage"
 
     if "train" in stages:
+
+        def probe(model, n=2 if smoke else 10):
+            """Planning success on the first n pinned queries, reported at milestones."""
+            model_spec = evaluate.ModelSpec("probe", model, pixel_transform(), {"action": scaler}, 0, 384, "")
+            return evaluate.run_eval(model_spec, spec, dataset, queries, n, device, cem=cem)["success_rate"]
+
         for v in variants:
             train.train_variant(
                 spec,
@@ -142,11 +148,12 @@ def run(args):
                 v,
                 steps,
                 device,
-                batch_size=8 if smoke else 64,
+                batch_size=8 if smoke else (128 if v.startswith("r") else 64),  # readouts: LeWM's batch
                 milestones=milestones,
                 eval_every=10 if smoke else 500,
                 ckpt_every=10 if smoke else 1000,
                 log_dir=results / "training",
+                probe=probe,
             )
 
     if "evaluate" in stages:
@@ -170,8 +177,8 @@ def run(args):
                     {"action": data.scaler_from_stats(meta["action_mean"], meta["action_std"])},
                     TOKENS[v],
                     384,
-                    "dinov2_vits14 (frozen)",
-                    pooling=v,
+                    "dinov2_vits14 (frozen)" + (" + learned readout" if v.startswith("r") else ""),
+                    pooling="readout" if v.startswith("r") else v,
                     train_episodes=str(meta["train_episodes"]),
                     notes={"checkpoint": name, "val_mse": f"{meta['val_mse']:.4f}"},
                 ),
