@@ -42,7 +42,7 @@ def run(args):
 
     from . import data, envs, evaluate, features, references, train
     from .models import TOKENS, feature_variant, pixel_transform
-    from .paths import data_root, persist_root, results_root
+    from .paths import data_root, persist_root, restore, results_root
 
     spec = envs.ENVS[args.env]
     device = args.device or (
@@ -131,7 +131,7 @@ def run(args):
         tag = features.feature_tag(spec, n_ep, smoke)
         needed = {feature_variant(v) for v in variants}
         if files is None:
-            missing = [v for v in needed if not features.feature_path(tag, v).exists()]
+            missing = [v for v in needed if not restore(features.feature_path(tag, v), "features")]
             assert not missing, f"features missing for {missing}: run the features stage"
 
     if "train" in stages:
@@ -158,8 +158,6 @@ def run(args):
 
     if "evaluate" in stages:
         import stable_worldmodel as swm
-
-        from .paths import restore
 
         snapshot = args.snapshot or steps
         for v in variants:
