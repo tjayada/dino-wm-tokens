@@ -55,7 +55,7 @@ def _import_adapter():
     is_ds = lambda k: k == "datasets" or k.startswith("datasets.")  # noqa: E731
     hf = {k: sys.modules.pop(k) for k in list(sys.modules) if is_ds(k)}
     sys.path[:0] = [dino_root, str(adapter)]
-    from dinowm_swm import planning  # noqa: PLC0415
+    from dinowm_swm import planning
 
     for k in [k for k in sys.modules if is_ds(k)]:
         del sys.modules[k]

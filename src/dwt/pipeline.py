@@ -185,10 +185,12 @@ def run(args):
             del model
 
     if "plot" in stages:
-        from .plots import pareto
+        from .plots import pareto, tokens_curve
 
-        out = results / "figures" / f"pareto_{spec.name}{'_smoke' if smoke else ''}.png"
+        suffix = "_smoke" if smoke else ""
+        out = results / "figures" / f"pareto_{spec.name}{suffix}.png"
         rows = pareto(runs_csv, spec.name, out)
+        tokens_curve(runs_csv, spec.name, results / "figures" / f"tokens_{spec.name}{suffix}.png")
         print(
             rows[
                 ["method", "tokens_per_frame", "n_episodes", "success_rate", "time_per_replan_median_s"]

@@ -55,7 +55,6 @@ ENVS = {
         callables=(_set("_set_state", state="state"), _set("_set_goal_state", goal_state="goal_state")),
         lewm_repo="quentinll/lewm-pusht",
         dinowm_repo=f"{HF_DINOWM}/point-cloud-pusht",
-        tested=False,
     ),
     "reacher": EnvSpec(
         name="reacher",

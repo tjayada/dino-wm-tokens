@@ -63,3 +63,80 @@ def pareto(runs_csv: Path, env: str, out_png: Path, title: str | None = None):
     fig.savefig(out_png, dpi=150)
     plt.close(fig)
     return rows
+
+
+def tokens_curve(runs_csv: Path, env: str, out_png: Path):
+    """Success against tokens per frame per (pooling family, training set), with the references."""
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    matplotlib.use("Agg")
+    runs = pd.read_csv(runs_csv)
+    rows = runs[runs.env == env]
+    refs = rows[rows.method.isin(LABELS)].drop_duplicates("method", keep="last")
+    pooled = rows[rows.method.str.startswith("pooled_")].drop_duplicates(
+        ["method", "train_episodes"], keep="last"
+    )
+    pooled = pooled.assign(family=pooled.pooling.where(pooled.pooling == "readout", "fixed"))
+    styles = {"fixed": ("#2a78d6", "o"), "readout": ("#1baf7a", "s")}
+    most = pooled.train_episodes.max()
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    for (family, n_train), grp in sorted(pooled.groupby(["family", "train_episodes"])):
+        color, marker = styles[family]
+        alpha = 1.0 if n_train == most else 0.45
+        name = "fixed pooling" if family == "fixed" else "learned readout"
+        line = grp[grp.method != "pooled_mean"].sort_values(
+            "tokens_per_frame"
+        )  # `mean` shares x=1 with `cls`
+        ax.plot(
+            line.tokens_per_frame,
+            line.success_rate,
+            marker=marker,
+            color=color,
+            alpha=alpha,
+            linewidth=1.5,
+            markersize=7,
+            label=f"{name}, {int(round(n_train / 0.9, -3)):,} episodes",
+            zorder=3,
+        )
+        mean = grp[grp.method == "pooled_mean"]
+        if len(mean):
+            ax.scatter(
+                mean.tokens_per_frame, mean.success_rate, marker="x", color=color, alpha=alpha, zorder=3
+            )
+            ax.annotate(
+                "mean",
+                (1, float(mean.success_rate.iloc[0])),
+                xytext=(5, -4),
+                textcoords="offset points",
+                fontsize=8,
+                color=color,
+                alpha=alpha,
+            )
+    for ref in refs.itertuples():
+        ax.axhline(ref.success_rate, color=COLORS[ref.method], linestyle="--", linewidth=1.2, zorder=2)
+        ax.annotate(
+            f"{LABELS[ref.method]}, all episodes",
+            (196, ref.success_rate),
+            xytext=(0, 4),
+            textcoords="offset points",
+            fontsize=8,
+            color=COLORS[ref.method],
+            ha="right",
+        )
+    ax.set_xscale("log", base=2)
+    ax.set_xticks([1, 4, 16, 49, 196])
+    ax.set_xticklabels(["1", "4", "16", "49", "196"])
+    ax.set_xlabel("visual tokens per frame (frozen DINOv2 ViT-S/14)")
+    ax.set_ylabel("success rate (%), 50 episodes")
+    ax.set_ylim(0, 105)
+    ax.set_title(f"{env}: planning success vs. token budget")
+    ax.grid(True, which="major", color="#dddddd", linewidth=0.6, zorder=0)
+    for side in ["top", "right"]:
+        ax.spines[side].set_visible(False)
+    ax.legend(loc="lower right", fontsize=8, frameon=False)
+    fig.tight_layout()
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)

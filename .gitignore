@@ -7,6 +7,5 @@ third_party/
 results/runs_smoke.csv
 results/queries/tworoom_local_*
 results/training/dwt_tworoom_local_*
-results/figures/pareto_tworoom_smoke.png
 *.egg-info/
 results/figures/*_smoke.png
